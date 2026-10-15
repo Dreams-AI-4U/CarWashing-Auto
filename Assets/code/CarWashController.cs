@@ -10,7 +10,7 @@ public class CarWashController : MonoBehaviour
     public float moveDuration = 8.0f;       // Thời gian di chuyển 1 chiều
 
     [Header("--- 2. CỤM HIỆU ỨNG (SPRAY, FOAM, DRYER) ---")]
-    public GameObject sprayGroup;           // Vòi xịt nước (Dùng cho Bước 1, 3, 4)
+    public GameObject sprayGroup;           // Vòi xịt nước (Bước 1, 3, 4)
     public GameObject foamGroup;            // Vòi phun bọt tuyết (Bước 2)
     public GameObject dryerGroup;           // Hệ thống quạt sấy (Bước 5)
 
@@ -39,16 +39,17 @@ public class CarWashController : MonoBehaviour
 
     [Header("--- 5. BẢNG ĐÈN LED TƯỜNG (5 BƯỚC) ---")]
     public Renderer[] stageLeds;            
-    public Material ledOffMaterial;        
-    public Material ledOnMaterial;         
+    public Material ledOffMaterial;         // Màu xám/tắt (Chưa chạy)
+    public Material ledRedMaterial;         // Màu ĐỎ (Đang thực hiện bước)
+    public Material ledGreenMaterial;       // Màu XANH (Hoàn thành bước)
 
     private bool isSpinningWheelBrushes = false;
     private bool isSpinningBodyBrushes = false;
-    private bool isWashing = false;
+
+    private Coroutine activeStepCoroutine = null;
 
     private void Start()
     {
-        // Tắt triệt để và dọn sạch hiệu ứng ngay khi mở Scene
         StopAndHideEffect(sprayGroup);
         StopAndHideEffect(foamGroup);
         StopAndHideEffect(dryerGroup);
@@ -72,7 +73,6 @@ public class CarWashController : MonoBehaviour
 
     private void Update()
     {
-        // Xoay chổi mâm bánh xe ở Bước 3
         if (isSpinningWheelBrushes)
         {
             float rotStep = wheelBrushRotateSpeed * Time.deltaTime;
@@ -80,115 +80,224 @@ public class CarWashController : MonoBehaviour
             if (wheelBrushRight) wheelBrushRight.Rotate(Vector3.up, -rotStep, Space.Self);
         }
 
-        // Xoay 3 chổi cọ vỏ xe ở Bước 4
         if (isSpinningBodyBrushes)
         {
             float rotStep = bodyBrushRotateSpeed * Time.deltaTime;
             if (brushTop) brushTop.Rotate(Vector3.up, rotStep, Space.Self);
             if (brushVerticalLeft) brushVerticalLeft.Rotate(Vector3.up, rotStep, Space.Self);
-            if (brushVerticalRight) brushVerticalRight.Rotate(Vector3.up, -rotStep, Space.Self);
+            if (brushVerticalRight) brushVerticalRight.Rotate(Vector3.up, rotStep, Space.Self);
         }
     }
 
+    // =========================================================================
+    // HÀM CHẠY TRỌN BỘ 5 BƯỚC TỰ ĐỘNG
+    // =========================================================================
     public void StartWashProcess()
     {
-        StartCarWashProcess();
-    }
-
-    public void StartCarWashProcess()
-    {
-        if (!isWashing)
-        {
-            StartCoroutine(CarWashSequenceRoutine());
-        }
+        StopCurrentStep();
+        activeStepCoroutine = StartCoroutine(CarWashSequenceRoutine());
     }
 
     private IEnumerator CarWashSequenceRoutine()
     {
-        isWashing = true;
-        yield return new WaitForSeconds(1.0f);
+        SetAllLEDsOff(); // Reset các đèn về trạng thái Tắt trước khi bắt đầu chuỗi
+        yield return StartCoroutine(Step1_PreWashRoutine());
+        yield return StartCoroutine(Step2_FoamRoutine());
+        yield return StartCoroutine(Step3_WheelWashRoutine());
+        yield return StartCoroutine(Step4_BodyScrubRoutine());
+        yield return StartCoroutine(Step5_DryerRoutine());
+    }
 
-        // =========================================================================
-        // BƯỚC 1: XẢ NƯỚC RỬA SƠ BỘ (Start -> End)
-        // =========================================================================
-        SetStageLED(0);
-        PlayEffect(sprayGroup);
-        yield return StartCoroutine(MoveGantry(pointStart.position.z, pointEnd.position.z, moveDuration));
+    // =========================================================================
+    // HÀM CHUYỂN BƯỚC LẬP TỨC KHI BẤM NÚT (1 -> 6)
+    // =========================================================================
+    public void ExecuteStep(int stepIndex)
+    {
+        StopCurrentStep();
+
+        switch (stepIndex)
+        {
+            case 1:
+                activeStepCoroutine = StartCoroutine(Step1_PreWashRoutine());
+                break;
+            case 2:
+                activeStepCoroutine = StartCoroutine(Step2_FoamRoutine());
+                break;
+            case 3:
+                activeStepCoroutine = StartCoroutine(Step3_WheelWashRoutine());
+                break;
+            case 4:
+                activeStepCoroutine = StartCoroutine(Step4_BodyScrubRoutine());
+                break;
+            case 5:
+                activeStepCoroutine = StartCoroutine(Step5_DryerRoutine());
+                break;
+            case 6:
+                // NÚT 6: RỬA TỰ ĐỘNG TRỌN GÓI 5 BƯỚC
+                Debug.Log(">>> KÍCH HOẠT QUY TRÌNH RỬA TỰ ĐỘNG TRỌN GÓI (5 BƯỚC) <<<");
+                activeStepCoroutine = StartCoroutine(CarWashSequenceRoutine());
+                break;
+            default:
+                Debug.LogError("Bước rửa không hợp lệ: " + stepIndex);
+                break;
+        }
+    }
+
+    public void StopCurrentStep()
+    {
+        StopAllCoroutines();
+        activeStepCoroutine = null;
+
         StopAndHideEffect(sprayGroup);
-        yield return new WaitForSeconds(0.5f);
-
-        // =========================================================================
-        // BƯỚC 2: PHUN BỌT TUYẾT PHỦ THÂN XE (End -> Start)
-        // =========================================================================
-        SetStageLED(1);
-        PlayEffect(foamGroup);
-        yield return StartCoroutine(MoveGantry(pointEnd.position.z, pointStart.position.z, moveDuration));
         StopAndHideEffect(foamGroup);
-        yield return new WaitForSeconds(0.5f);
+        StopAndHideEffect(dryerGroup);
 
-        // =========================================================================
-        // BƯỚC 3: CỌ MÂM BÁNH TRƯỚC VÀ BÁNH SAU + XẢ NƯỚC
-        // =========================================================================
-        SetStageLED(2);
-        
+        isSpinningWheelBrushes = false;
+        isSpinningBodyBrushes = false;
+
+        if (brushTop != null)
+        {
+            Vector3 topPos = brushTop.localPosition;
+            topPos.y = brushTopHighY;
+            brushTop.localPosition = topPos;
+        }
+
+        SetAllLEDsOff();
+    }
+
+    // =========================================================================
+    // CÁC BƯỚC RỬA RIÊNG BIỆT (XỬ LÝ ĐÈN ĐỎ -> ĐÈN XANH)
+    // =========================================================================
+
+    // BƯỚC 1: XẢ NƯỚC RỬA SƠ BỘ
+    private IEnumerator Step1_PreWashRoutine()
+    {
+        SetLEDState(0, ledRedMaterial); // Đang chạy: Sáng ĐỎ
+        PlayEffect(sprayGroup);
+
+        yield return MoveGantry(gantryTransform.position.z, pointEnd.position.z, moveDuration);
+
+        StopAndHideEffect(sprayGroup);
+        SetLEDState(0, ledGreenMaterial); // Hoàn thành: Đổi sang XANH
+        yield return new WaitForSeconds(0.3f);
+        Debug.Log(">>> BƯỚC 1 HOÀN THÀNH <<<");
+    }
+
+    // BƯỚC 2: PHUN BỌT TUYẾT PHỦ THÂN XE
+    private IEnumerator Step2_FoamRoutine()
+    {
+        SetLEDState(1, ledRedMaterial); // Đang chạy: Sáng ĐỎ
+        PlayEffect(foamGroup);
+
+        yield return MoveGantry(gantryTransform.position.z, pointStart.position.z, moveDuration);
+
+        StopAndHideEffect(foamGroup);
+        SetLEDState(1, ledGreenMaterial); // Hoàn thành: Đổi sang XANH
+        yield return new WaitForSeconds(0.3f);
+        Debug.Log(">>> BƯỚC 2 HOÀN THÀNH <<<");
+    }
+
+    // BƯỚC 3: CỌ MÂM BÁNH TRƯỚC VÀ BÁNH SAU + XẢ NƯỚC
+    private IEnumerator Step3_WheelWashRoutine()
+    {
+        SetLEDState(2, ledRedMaterial); // Đang chạy: Sáng ĐỎ
+
         float frontWheelZ = Mathf.Lerp(pointStart.position.z, pointEnd.position.z, frontWheelRatio);
         float rearWheelZ  = Mathf.Lerp(pointStart.position.z, pointEnd.position.z, rearWheelRatio);
 
-        // Bật vòi xịt nước rửa mâm bánh
         PlayEffect(sprayGroup);
 
-        // 3A. Bánh trước (Gantry di chuyển tới bánh trước -> Xoay chổi cọ mâm)
-        yield return StartCoroutine(MoveGantry(pointStart.position.z, frontWheelZ, moveDuration * 0.3f));
+        yield return MoveGantry(gantryTransform.position.z, frontWheelZ, moveDuration * 0.4f);
         isSpinningWheelBrushes = true;
-        yield return StartCoroutine(ScrubWheelAtPosition(frontWheelZ, wheelWashDuration));
+        yield return ScrubWheelAtPosition(frontWheelZ, wheelWashDuration);
 
-        // 3B. Bánh sau (Gantry di chuyển tiếp tới bánh sau -> Xoay chổi cọ mâm)
-        yield return StartCoroutine(MoveGantry(frontWheelZ, rearWheelZ, moveDuration * 0.4f));
-        yield return StartCoroutine(ScrubWheelAtPosition(rearWheelZ, wheelWashDuration));
+        yield return MoveGantry(gantryTransform.position.z, rearWheelZ, moveDuration * 0.4f);
+        yield return ScrubWheelAtPosition(rearWheelZ, wheelWashDuration);
 
-        isSpinningWheelBrushes = false; // Tắt chổi mâm
-        StopAndHideEffect(sprayGroup);  // Tắt vòi xịt nước
+        isSpinningWheelBrushes = false;
+        StopAndHideEffect(sprayGroup);
 
-        // Lùi Gantry về Start
-        yield return StartCoroutine(MoveGantry(gantryTransform.position.z, pointStart.position.z, moveDuration * 0.5f));
-        yield return new WaitForSeconds(0.5f);
+        yield return MoveGantry(gantryTransform.position.z, pointStart.position.z, moveDuration * 0.5f);
+        SetLEDState(2, ledGreenMaterial); // Hoàn thành: Đổi sang XANH
+        yield return new WaitForSeconds(0.3f);
+        Debug.Log(">>> BƯỚC 3 HOÀN THÀNH <<<");
+    }
 
-        // =========================================================================
-        // BƯỚC 4: 3 CHỔI XOAY CỌ RỬA VỎ XE + XẢ NƯỚC RỬA (Start -> End)
-        // =========================================================================
-        SetStageLED(3);
+    // BƯỚC 4: 3 CHỔI XOAY CỌ RỬA VỎ XE (2 LƯỢT KHỨ HỒI)
+    private IEnumerator Step4_BodyScrubRoutine()
+    {
+        SetLEDState(3, ledRedMaterial); // Đang chạy: Sáng ĐỎ
 
-        // Hạ chổi top
-        yield return StartCoroutine(MoveBrushTopY(brushTopHighY, brushTopLowY, brushMoveDuration));
+        yield return MoveBrushTopY(brushTop.localPosition.y, brushTopLowY, brushMoveDuration);
 
-        isSpinningBodyBrushes = true; // Xoay 3 chổi cọ
-        PlayEffect(sprayGroup);       // Bật vòi xịt nước trơn cọ vỏ xe
+        isSpinningBodyBrushes = true;
+        PlayEffect(sprayGroup);
 
-        yield return StartCoroutine(MoveGantry(pointStart.position.z, pointEnd.position.z, moveDuration));
+        // Chà Lượt 1: Điểm hiện tại -> Đuôi xe
+        yield return MoveGantry(gantryTransform.position.z, pointEnd.position.z, moveDuration);
 
-        isSpinningBodyBrushes = false; // Tắt 3 chổi
-        StopAndHideEffect(sprayGroup);  // Tắt vòi xịt nước
+        // Chà Lượt 2: Đuôi xe -> Đầu xe
+        yield return MoveGantry(gantryTransform.position.z, pointStart.position.z, moveDuration);
 
-        // Nâng chổi top nghỉ
-        yield return StartCoroutine(MoveBrushTopY(brushTopLowY, brushTopHighY, brushMoveDuration));
-        yield return new WaitForSeconds(0.5f);
+        isSpinningBodyBrushes = false;
+        StopAndHideEffect(sprayGroup);
 
-        // =========================================================================
-        // BƯỚC 5: THỔI KHÔ BẰNG QUẠT SẤY (End -> Start)
-        // =========================================================================
-        SetStageLED(4);
+        yield return MoveBrushTopY(brushTop.localPosition.y, brushTopHighY, brushMoveDuration);
+        SetLEDState(3, ledGreenMaterial); // Hoàn thành: Đổi sang XANH
+        yield return new WaitForSeconds(0.3f);
+        Debug.Log(">>> BƯỚC 4 HOÀN THÀNH (ĐÃ CHÀ 2 LƯỢT) <<<");
+    }
+
+    // BƯỚC 5: THỔI KHÔ BẰNG QUẠT SẤY
+    private IEnumerator Step5_DryerRoutine()
+    {
+        SetLEDState(4, ledRedMaterial); // Đang chạy: Sáng ĐỎ
         PlayEffect(dryerGroup);
 
-        yield return StartCoroutine(MoveGantry(pointEnd.position.z, pointStart.position.z, moveDuration));
+        yield return MoveGantry(gantryTransform.position.z, pointStart.position.z, moveDuration);
 
         StopAndHideEffect(dryerGroup);
-        yield return new WaitForSeconds(0.5f);
+        SetLEDState(4, ledGreenMaterial); // Hoàn thành: Đổi sang XANH
+        yield return new WaitForSeconds(0.3f);
+        Debug.Log(">>> BƯỚC 5 HOÀN THÀNH <<<");
+    }
 
-        // =========================================================================
-        // HOÀN THÀNH QUY TRÌNH
-        // =========================================================================
-        Debug.Log(">>> QUY TRÌNH RỬA XE TỰ ĐỘNG 5 BƯỚC HOÀN THÀNH! <<<");
-        isWashing = false;
+    // =========================================================================
+    // TÍNH TOÁN DI CHUYỂN GANTRY
+    // =========================================================================
+    private IEnumerator MoveGantry(float startZ, float targetZ, float duration)
+    {
+        if (gantryTransform == null || pointStart == null || pointEnd == null) yield break;
+
+        float totalFullDistance = Mathf.Abs(pointEnd.position.z - pointStart.position.z);
+        float distanceToTravel = Mathf.Abs(targetZ - startZ);
+
+        float actualDuration = (totalFullDistance > 0.001f) 
+            ? duration * (distanceToTravel / totalFullDistance) 
+            : duration;
+
+        if (actualDuration <= 0.01f)
+        {
+            Vector3 finalPos = gantryTransform.position;
+            finalPos.z = targetZ;
+            gantryTransform.position = finalPos;
+            yield break;
+        }
+
+        float elapsed = 0f;
+        Vector3 pos = gantryTransform.position;
+
+        while (elapsed < actualDuration)
+        {
+            elapsed += Time.deltaTime;
+            float newZ = Mathf.Lerp(startZ, targetZ, elapsed / actualDuration);
+            pos.z = newZ;
+            gantryTransform.position = pos;
+            yield return null;
+        }
+
+        pos.z = targetZ;
+        gantryTransform.position = pos;
     }
 
     private IEnumerator ScrubWheelAtPosition(float centerZ, float duration)
@@ -203,26 +312,6 @@ public class CarWashController : MonoBehaviour
             gantryTransform.position = pos;
             yield return null;
         }
-    }
-
-    private IEnumerator MoveGantry(float startZ, float targetZ, float duration)
-    {
-        if (gantryTransform == null) yield break;
-
-        float elapsed = 0f;
-        Vector3 pos = gantryTransform.position;
-
-        while (elapsed < duration)
-        {
-            elapsed += Time.deltaTime;
-            float newZ = Mathf.Lerp(startZ, targetZ, elapsed / duration);
-            pos.z = newZ;
-            gantryTransform.position = pos;
-            yield return null;
-        }
-
-        pos.z = targetZ;
-        gantryTransform.position = pos;
     }
 
     private IEnumerator MoveBrushTopY(float startY, float targetY, float duration)
@@ -244,7 +333,6 @@ public class CarWashController : MonoBehaviour
         brushTop.localPosition = localPos;
     }
 
-    // Bật Particle System
     private void PlayEffect(GameObject objGroup)
     {
         if (objGroup != null)
@@ -255,7 +343,6 @@ public class CarWashController : MonoBehaviour
         }
     }
 
-    // Tắt và dọn sạch các hạt Particle System
     private void StopAndHideEffect(GameObject objGroup)
     {
         if (objGroup != null)
@@ -269,25 +356,29 @@ public class CarWashController : MonoBehaviour
         }
     }
 
-    private void SetStageLED(int activeIndex)
+    // =========================================================================
+    // QUẢN LÝ ĐÈN LED
+    // =========================================================================
+    private void SetLEDState(int index, Material mat)
     {
-        if (stageLeds == null || stageLeds.Length == 0) return;
-
-        for (int i = 0; i < stageLeds.Length; i++)
+        if (stageLeds != null && index >= 0 && index < stageLeds.Length)
         {
-            if (stageLeds[i] != null)
+            if (stageLeds[index] != null && mat != null)
             {
-                stageLeds[i].material = (i == activeIndex) ? ledOnMaterial : ledOffMaterial;
+                stageLeds[index].material = mat;
             }
         }
     }
 
-    private void SetAllLEDsOff()
+    public void SetAllLEDsOff()
     {
         if (stageLeds == null) return;
         foreach (var led in stageLeds)
         {
-            if (led != null) led.material = ledOffMaterial;
+            if (led != null && ledOffMaterial != null)
+            {
+                led.material = ledOffMaterial;
+            }
         }
     }
 }
